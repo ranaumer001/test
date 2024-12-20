@@ -20,13 +20,10 @@ puppeteer.use(StealthPlugin());
         '--disable-setuid-sandbox',
         '--disable-gpu',
       ],
-      timeout: 60000, // Increased timeout for browser launch
     });
-
     const page = await browser.newPage();
     console.log("[INFO] First browser launched successfully.");
 
-    // Part 1: Scrape business links
     const url = process.argv[2]; // Get the URL from command-line arguments
     if (!url) {
       console.error("[ERROR] URL not provided. Exiting.");
@@ -39,7 +36,7 @@ puppeteer.use(StealthPlugin());
     try {
       const acceptCookiesSelector = "form:nth-child(2)";
       console.log("[INFO] Checking for cookies pop-up...");
-      await page.waitForSelector(acceptCookiesSelector, { timeout: 10000 });
+      await page.waitForSelector(acceptCookiesSelector, { timeout: 5000 });
       await page.click(acceptCookiesSelector);
       console.log("[INFO] Cookies pop-up dismissed.");
     } catch (error) {
@@ -49,35 +46,28 @@ puppeteer.use(StealthPlugin());
     const links = [];
     const businessSelector = ".hfpxzc";
 
-    console.log("[INFO] Starting scroll to load all results...");
+    console.log("[INFO] Scrolling to load all results...");
     await page.evaluate(async () => {
-      const searchResultsSelector = 'div[role="feed"]';
-      const wrapper = document.querySelector(searchResultsSelector);
+      const scrollDistance = 1000;
+      const scrollDelay = 3000;
+      const maxAttempts = 5;
 
-      await new Promise((resolve) => {
-        const distance = 1000;
-        const scrollDelay = 3000;
-        let totalHeight = 0;
-        let attempts = 0;
+      let totalScrolled = 0;
+      let attempts = 0;
+      const container = document.querySelector('div[role="feed"]');
 
-        const timer = setInterval(async () => {
-          const scrollHeightBefore = wrapper.scrollHeight;
-          wrapper.scrollBy(0, distance);
-          totalHeight += distance;
+      while (attempts < maxAttempts) {
+        const previousHeight = container.scrollHeight;
+        container.scrollBy(0, scrollDistance);
+        totalScrolled += scrollDistance;
 
-          if (totalHeight >= scrollHeightBefore) {
-            totalHeight = 0;
-            attempts += 1;
-            await new Promise((resolve) => setTimeout(resolve, scrollDelay));
-            const scrollHeightAfter = wrapper.scrollHeight;
-
-            if (scrollHeightAfter <= scrollHeightBefore || attempts > 5) {
-              clearInterval(timer);
-              resolve();
-            }
-          }
-        }, 500);
-      });
+        await new Promise((resolve) => setTimeout(resolve, scrollDelay));
+        if (container.scrollHeight === previousHeight) {
+          attempts++;
+        } else {
+          attempts = 0;
+        }
+      }
     });
 
     console.log("[INFO] Extracting business links...");
@@ -97,37 +87,29 @@ puppeteer.use(StealthPlugin());
     await browser.close();
     console.log("[INFO] First browser closed.");
 
-    // Part 2: Scrape business details using collected links
+    // Proceed with Part 2: Scraping business details
     if (!fs.existsSync(businessLinksFile)) {
       throw new Error(`[ERROR] ${businessLinksFile} not found. Aborting business details scraping.`);
     }
 
     const businessLinks = JSON.parse(fs.readFileSync(businessLinksFile));
     const results = [];
+    const browser2 = await puppeteer.launch({
+      executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+      ],
+    });
+    const page2 = await browser2.newPage();
 
-    console.log("[INFO] Starting to scrape business details...");
     for (let i = 0; i < businessLinks.length; i++) {
       const link = businessLinks[i];
       console.log(`[INFO] Scraping business ${i + 1} of ${businessLinks.length}: ${link}`);
 
-      let browser2 = null;
-      let page2 = null;
-
       try {
-        console.log("[INFO] Launching a new browser for the business...");
-        browser2 = await puppeteer.launch({
-          executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
-          headless: true,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-gpu',
-          ],
-          timeout: 60000, // Increased timeout for browser launch
-        });
-
-        page2 = await browser2.newPage();
-        console.log("[INFO] Navigating to the business link...");
         await page2.goto(link, { waitUntil: "networkidle2", timeout: 60000 });
 
         const data = await page2.evaluate(() => {
@@ -165,12 +147,8 @@ puppeteer.use(StealthPlugin());
 
         results.push({ link, ...data });
       } catch (error) {
-        console.error(`[ERROR] Failed to scrape ${link}:`, error.stack);
+        console.error(`[ERROR] Failed to scrape ${link}: ${error.message}`);
         results.push({ link, error: error.message });
-      } finally {
-        if (page2) await page2.close();
-        if (browser2) await browser2.close();
-        console.log("[INFO] Browser for business closed.");
       }
     }
 
@@ -183,9 +161,11 @@ puppeteer.use(StealthPlugin());
       fs.writeFileSync(businessDetailsCSV, csv);
       console.log(`[INFO] CSV file created: ${businessDetailsCSV}`);
     } catch (error) {
-      console.error("[ERROR] Error while converting JSON to CSV:", error.stack);
+      console.error("[ERROR] Error while converting JSON to CSV:", error.message);
     }
+
+    await browser2.close();
   } catch (error) {
-    console.error("[ERROR] Error in script execution:", error.stack);
+    console.error("[ERROR] Error in script execution:", error.message);
   }
 })();
