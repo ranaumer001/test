@@ -47,28 +47,38 @@ puppeteer.use(StealthPlugin());
     const businessSelector = ".hfpxzc";
 
     console.log("[INFO] Scrolling to load all results...");
+    await page.waitForSelector('div[role="feed"]', { timeout: 10000 }).catch(() => {
+      throw new Error("Feed container not found. Cannot scroll the page.");
+    });
+    
     await page.evaluate(async () => {
+      const container = document.querySelector('div[role="feed"]');
+      if (!container) {
+        throw new Error("Feed container not found in the DOM.");
+      }
+    
       const scrollDistance = 1000;
       const scrollDelay = 3000;
       const maxAttempts = 5;
-
+    
       let totalScrolled = 0;
       let attempts = 0;
-      const container = document.querySelector('div[role="feed"]');
-
+    
       while (attempts < maxAttempts) {
         const previousHeight = container.scrollHeight;
         container.scrollBy(0, scrollDistance);
         totalScrolled += scrollDistance;
-
+    
         await new Promise((resolve) => setTimeout(resolve, scrollDelay));
+    
         if (container.scrollHeight === previousHeight) {
           attempts++;
         } else {
-          attempts = 0;
+          attempts = 0; // Reset attempts if content is still loading
         }
       }
     });
+
 
     console.log("[INFO] Extracting business links...");
     const extractedLinks = await page.evaluate((selector) => {
