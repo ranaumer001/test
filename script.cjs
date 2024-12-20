@@ -12,14 +12,22 @@ puppeteer.use(StealthPlugin());
   const businessDetailsCSV = "public/updated_business_details.csv";
 
   try {
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await puppeteer.launch({
+      executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
+      headless: true,
+      args: [
+        '--no-sandbox',  // Disable the sandbox (use carefully)
+        '--disable-setuid-sandbox',  // Disable the setuid sandbox (for some environments)
+        '--disable-gpu'  // Disable GPU hardware acceleration (can help with some systems)
+      ]
+    });
     const page = await browser.newPage();
 
     // Part 1: Scrape business links
     const url = process.argv[2]; // Get the URL from command-line arguments
     if (!url) {
-    console.error("URL not provided.");
-    process.exit(1);
+      console.error("URL not provided.");
+      process.exit(1);
     }
 
     await page.goto(url, { waitUntil: "networkidle2" });
@@ -87,15 +95,29 @@ puppeteer.use(StealthPlugin());
 
     const businessLinks = JSON.parse(fs.readFileSync(businessLinksFile));
     const results = [];
-    const browser2 = await puppeteer.launch({ headless: true });
-    const page2 = await browser2.newPage();
 
+    // Loop over each business link and scrape details, close and reopen browser for each link
     for (let i = 0; i < businessLinks.length; i++) {
       const link = businessLinks[i];
       console.log(`Scraping business ${i + 1} of ${businessLinks.length}: ${link}`);
 
+      let browser2;
+      let page2;
+
       try {
-        await page2.goto(link, { waitUntil: "networkidle2" });
+        // Launch browser and create page for each scrape (this ensures it's fresh for each link)
+        browser2 = await puppeteer.launch({
+          executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu'
+          ]
+        });
+        page2 = await browser2.newPage();
+
+        await page2.goto(link, { waitUntil: "networkidle2", timeout: 60000 });
 
         const data = await page2.evaluate(() => {
           const extractText = (selector) => {
@@ -131,9 +153,17 @@ puppeteer.use(StealthPlugin());
         });
 
         results.push({ link, ...data });
+
+        // Close the browser after each scrape
+        await browser2.close();
       } catch (error) {
         console.log(`Failed to scrape ${link}:`, error.message);
         results.push({ link, error: error.message });
+
+        // Ensure the browser is closed in case of an error
+        if (browser2) {
+          await browser2.close();
+        }
       }
     }
 
@@ -148,8 +178,6 @@ puppeteer.use(StealthPlugin());
     } catch (error) {
       console.error("Error while converting JSON to CSV:", error.message);
     }
-
-    await browser2.close();
   } catch (error) {
     console.error("Error in script execution:", error.message);
   }
