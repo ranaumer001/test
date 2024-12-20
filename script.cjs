@@ -52,32 +52,36 @@ puppeteer.use(StealthPlugin());
     });
     
     await page.evaluate(async () => {
-      const container = document.querySelector('div[role="feed"]');
-      if (!container) {
-        throw new Error("Feed container not found in the DOM.");
-      }
-    
-      const scrollDistance = 1000;
-      const scrollDelay = 3000;
-      const maxAttempts = 5;
-    
-      let totalScrolled = 0;
+    const searchResultsSelector = 'div[role="feed"]'; // Adjusted for your page
+    const wrapper = document.querySelector(searchResultsSelector);
+  
+    await new Promise((resolve) => {
+      const distance = 1000; // Pixels to scroll each time
+      const scrollDelay = 3000; // Delay in milliseconds
+      let totalHeight = 0;
       let attempts = 0;
-    
-      while (attempts < maxAttempts) {
-        const previousHeight = container.scrollHeight;
-        container.scrollBy(0, scrollDistance);
-        totalScrolled += scrollDistance;
-    
-        await new Promise((resolve) => setTimeout(resolve, scrollDelay));
-    
-        if (container.scrollHeight === previousHeight) {
-          attempts++;
-        } else {
-          attempts = 0; // Reset attempts if content is still loading
+  
+      const timer = setInterval(async () => {
+        const scrollHeightBefore = wrapper.scrollHeight; // Current height of scrollable area
+        wrapper.scrollBy(0, distance);
+        totalHeight += distance;
+  
+        // Check if additional content has been loaded
+        if (totalHeight >= scrollHeightBefore) {
+          totalHeight = 0;
+          attempts += 1;
+          await new Promise((resolve) => setTimeout(resolve, scrollDelay));
+          const scrollHeightAfter = wrapper.scrollHeight;
+  
+          // Stop scrolling after a certain number of attempts or no more content
+          if (scrollHeightAfter <= scrollHeightBefore || attempts > 5) {
+            clearInterval(timer);
+            resolve();
+          }
         }
-      }
+      }, 500);
     });
+  });
 
 
     console.log("[INFO] Extracting business links...");
