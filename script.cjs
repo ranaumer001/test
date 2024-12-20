@@ -11,6 +11,7 @@ puppeteer.use(StealthPlugin());
   const businessDetailsCSV = "public/updated_business_details.csv";
 
   try {
+    console.log("[INFO] Launching first browser for collecting business links...");
     const browser = await puppeteer.launch({
       executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
       headless: true,
@@ -19,29 +20,36 @@ puppeteer.use(StealthPlugin());
         '--disable-setuid-sandbox',
         '--disable-gpu',
       ],
+      timeout: 60000, // Increased timeout for browser launch
     });
+
     const page = await browser.newPage();
+    console.log("[INFO] First browser launched successfully.");
 
     // Part 1: Scrape business links
     const url = process.argv[2]; // Get the URL from command-line arguments
     if (!url) {
-      console.error("URL not provided.");
+      console.error("[ERROR] URL not provided. Exiting.");
       process.exit(1);
     }
 
-    await page.goto(url, { waitUntil: "networkidle2" });
+    console.log(`[INFO] Navigating to URL: ${url}`);
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
     try {
       const acceptCookiesSelector = "form:nth-child(2)";
-      await page.waitForSelector(acceptCookiesSelector, { timeout: 5000 });
+      console.log("[INFO] Checking for cookies pop-up...");
+      await page.waitForSelector(acceptCookiesSelector, { timeout: 10000 });
       await page.click(acceptCookiesSelector);
+      console.log("[INFO] Cookies pop-up dismissed.");
     } catch (error) {
-      console.log("No cookies pop-up found, proceeding...");
+      console.log("[WARN] No cookies pop-up found. Proceeding...");
     }
 
     const links = [];
     const businessSelector = ".hfpxzc";
 
+    console.log("[INFO] Starting scroll to load all results...");
     await page.evaluate(async () => {
       const searchResultsSelector = 'div[role="feed"]';
       const wrapper = document.querySelector(searchResultsSelector);
@@ -72,6 +80,7 @@ puppeteer.use(StealthPlugin());
       });
     });
 
+    console.log("[INFO] Extracting business links...");
     const extractedLinks = await page.evaluate((selector) => {
       return Array.from(document.querySelectorAll(selector)).map((el) => el.href);
     }, businessSelector);
@@ -83,27 +92,29 @@ puppeteer.use(StealthPlugin());
     });
 
     fs.writeFileSync(businessLinksFile, JSON.stringify(links, null, 2));
-    console.log(`Collected ${links.length} business links.`);
+    console.log(`[INFO] Collected ${links.length} business links.`);
 
     await browser.close();
+    console.log("[INFO] First browser closed.");
 
     // Part 2: Scrape business details using collected links
     if (!fs.existsSync(businessLinksFile)) {
-      throw new Error(`${businessLinksFile} not found. Aborting business details scraping.`);
+      throw new Error(`[ERROR] ${businessLinksFile} not found. Aborting business details scraping.`);
     }
 
     const businessLinks = JSON.parse(fs.readFileSync(businessLinksFile));
     const results = [];
 
+    console.log("[INFO] Starting to scrape business details...");
     for (let i = 0; i < businessLinks.length; i++) {
       const link = businessLinks[i];
-      console.log(`Scraping business ${i + 1} of ${businessLinks.length}: ${link}`);
+      console.log(`[INFO] Scraping business ${i + 1} of ${businessLinks.length}: ${link}`);
 
       let browser2 = null;
       let page2 = null;
 
       try {
-        // Launch new browser and page for each business
+        console.log("[INFO] Launching a new browser for the business...");
         browser2 = await puppeteer.launch({
           executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
           headless: true,
@@ -112,9 +123,12 @@ puppeteer.use(StealthPlugin());
             '--disable-setuid-sandbox',
             '--disable-gpu',
           ],
+          timeout: 60000, // Increased timeout for browser launch
         });
+
         page2 = await browser2.newPage();
-        await page2.goto(link, { waitUntil: "networkidle2", timeout: 30000 });
+        console.log("[INFO] Navigating to the business link...");
+        await page2.goto(link, { waitUntil: "networkidle2", timeout: 60000 });
 
         const data = await page2.evaluate(() => {
           const extractText = (selector) => {
@@ -151,26 +165,27 @@ puppeteer.use(StealthPlugin());
 
         results.push({ link, ...data });
       } catch (error) {
-        console.log(`Failed to scrape ${link}:`, error.message);
+        console.error(`[ERROR] Failed to scrape ${link}:`, error.stack);
         results.push({ link, error: error.message });
       } finally {
         if (page2) await page2.close();
         if (browser2) await browser2.close();
+        console.log("[INFO] Browser for business closed.");
       }
     }
 
     fs.writeFileSync(businessDetailsFile, JSON.stringify(results, null, 2));
-    console.log(`Scraping completed. Results saved to '${businessDetailsFile}'.`);
+    console.log(`[INFO] Scraping completed. Results saved to '${businessDetailsFile}'.`);
 
     // Convert JSON to CSV
     try {
       const csv = parse(results);
       fs.writeFileSync(businessDetailsCSV, csv);
-      console.log(`CSV file created: ${businessDetailsCSV}`);
+      console.log(`[INFO] CSV file created: ${businessDetailsCSV}`);
     } catch (error) {
-      console.error("Error while converting JSON to CSV:", error.message);
+      console.error("[ERROR] Error while converting JSON to CSV:", error.stack);
     }
   } catch (error) {
-    console.error("Error in script execution:", error.message);
+    console.error("[ERROR] Error in script execution:", error.stack);
   }
 })();
