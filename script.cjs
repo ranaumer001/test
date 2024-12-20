@@ -1,7 +1,6 @@
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const fs = require("fs");
-const path = require("path");
 const { parse } = require("json2csv");
 
 puppeteer.use(StealthPlugin());
@@ -16,10 +15,10 @@ puppeteer.use(StealthPlugin());
       executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
       headless: true,
       args: [
-        '--no-sandbox',  // Disable the sandbox (use carefully)
-        '--disable-setuid-sandbox',  // Disable the setuid sandbox (for some environments)
-        '--disable-gpu'  // Disable GPU hardware acceleration (can help with some systems)
-      ]
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+      ],
     });
     const page = await browser.newPage();
 
@@ -96,28 +95,26 @@ puppeteer.use(StealthPlugin());
     const businessLinks = JSON.parse(fs.readFileSync(businessLinksFile));
     const results = [];
 
-    // Loop over each business link and scrape details, close and reopen browser for each link
     for (let i = 0; i < businessLinks.length; i++) {
       const link = businessLinks[i];
       console.log(`Scraping business ${i + 1} of ${businessLinks.length}: ${link}`);
 
-      let browser2;
-      let page2;
+      let browser2 = null;
+      let page2 = null;
 
       try {
-        // Launch browser and create page for each scrape (this ensures it's fresh for each link)
+        // Launch new browser and page for each business
         browser2 = await puppeteer.launch({
           executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
           headless: true,
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-gpu'
-          ]
+            '--disable-gpu',
+          ],
         });
         page2 = await browser2.newPage();
-
-        await page2.goto(link, { waitUntil: "networkidle2", timeout: 60000 });
+        await page2.goto(link, { waitUntil: "networkidle2", timeout: 30000 });
 
         const data = await page2.evaluate(() => {
           const extractText = (selector) => {
@@ -153,17 +150,12 @@ puppeteer.use(StealthPlugin());
         });
 
         results.push({ link, ...data });
-
-        // Close the browser after each scrape
-        await browser2.close();
       } catch (error) {
         console.log(`Failed to scrape ${link}:`, error.message);
         results.push({ link, error: error.message });
-
-        // Ensure the browser is closed in case of an error
-        if (browser2) {
-          await browser2.close();
-        }
+      } finally {
+        if (page2) await page2.close();
+        if (browser2) await browser2.close();
       }
     }
 
