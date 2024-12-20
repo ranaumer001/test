@@ -3,6 +3,7 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const fs = require("fs");
 const { parse } = require("json2csv");
 
+// Use stealth plugin to avoid bot detection
 puppeteer.use(StealthPlugin());
 
 (async () => {
@@ -11,138 +12,86 @@ puppeteer.use(StealthPlugin());
   const businessDetailsCSV = "public/updated_business_details.csv";
 
   try {
-    console.log("[INFO] Launching first browser for collecting business links...");
+    console.log("Launching the browser...");
     const browser = await puppeteer.launch({
-      executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
+      executablePath: "/snap/chromium/current/usr/lib/chromium-browser/chrome",
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-gpu',
-      ],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
     });
     const page = await browser.newPage();
-    console.log("[INFO] First browser launched successfully.");
 
-    const url = process.argv[2]; // Get the URL from command-line arguments
+    // Part 1: Scrape business links
+    const url = process.argv[2];
     if (!url) {
-      console.error("[ERROR] URL not provided. Exiting.");
+      console.error("Error: No URL provided. Please provide a URL as a command-line argument.");
       process.exit(1);
     }
 
-    console.log(`[INFO] Navigating to URL: ${url}`);
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    console.log(`Navigating to the URL: ${url}`);
+    await page.goto(url, { waitUntil: "networkidle2" });
 
+    // Handle cookie pop-up
     try {
       const acceptCookiesSelector = "form:nth-child(2)";
-      console.log("[INFO] Checking for cookies pop-up...");
       await page.waitForSelector(acceptCookiesSelector, { timeout: 5000 });
+      console.log("Accepting cookies...");
       await page.click(acceptCookiesSelector);
-      console.log("[INFO] Cookies pop-up dismissed.");
-    } catch (error) {
-      console.log("[WARN] No cookies pop-up found. Proceeding...");
+    } catch {
+      console.log("No cookie pop-up detected. Proceeding...");
     }
 
-    const links = [];
-    const businessSelector = ".hfpxzc";
+    console.log("Scrolling the page to load all business links...");
+    const links = await page.evaluate(async () => {
+      const selector = ".hfpxzc";
+      const uniqueLinks = new Set();
 
-    console.log("[INFO] Scrolling to load all results...");
-    await page.waitForSelector('div[role="feed"]', { timeout: 10000 }).catch(() => {
-      throw new Error("Feed container not found. Cannot scroll the page.");
-    });
-    
-    await page.evaluate(async () => {
-    const searchResultsSelector = 'div[role="feed"]'; // Adjusted for your page
-    const wrapper = document.querySelector(searchResultsSelector);
-  
-    await new Promise((resolve) => {
-      const distance = 1000; // Pixels to scroll each time
-      const scrollDelay = 3000; // Delay in milliseconds
-      let totalHeight = 0;
-      let attempts = 0;
-  
-      const timer = setInterval(async () => {
-        const scrollHeightBefore = wrapper.scrollHeight; // Current height of scrollable area
-        wrapper.scrollBy(0, distance);
-        totalHeight += distance;
-  
-        // Check if additional content has been loaded
-        if (totalHeight >= scrollHeightBefore) {
-          totalHeight = 0;
-          attempts += 1;
-          await new Promise((resolve) => setTimeout(resolve, scrollDelay));
-          const scrollHeightAfter = wrapper.scrollHeight;
-  
-          // Stop scrolling after a certain number of attempts or no more content
-          if (scrollHeightAfter <= scrollHeightBefore || attempts > 5) {
-            clearInterval(timer);
-            resolve();
-          }
+      const scrollAndCollect = async () => {
+        let previousHeight;
+        while (true) {
+          previousHeight = document.body.scrollHeight;
+          window.scrollBy(0, 1000);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          document.querySelectorAll(selector).forEach((el) => uniqueLinks.add(el.href));
+          if (document.body.scrollHeight === previousHeight) break;
         }
-      }, 500);
-    });
-  });
+      };
 
-
-    console.log("[INFO] Extracting business links...");
-    const extractedLinks = await page.evaluate((selector) => {
-      return Array.from(document.querySelectorAll(selector)).map((el) => el.href);
-    }, businessSelector);
-
-    extractedLinks.forEach((link) => {
-      if (!links.includes(link)) {
-        links.push(link);
-      }
+      await scrollAndCollect();
+      return Array.from(uniqueLinks);
     });
 
+    console.log(`Collected ${links.length} business links.`);
     fs.writeFileSync(businessLinksFile, JSON.stringify(links, null, 2));
-    console.log(`[INFO] Collected ${links.length} business links.`);
+    console.log(`Saved business links to '${businessLinksFile}'.`);
 
     await browser.close();
-    console.log("[INFO] First browser closed.");
 
-    // Proceed with Part 2: Scraping business details
+    // Part 2: Scrape business details
     if (!fs.existsSync(businessLinksFile)) {
-      throw new Error(`[ERROR] ${businessLinksFile} not found. Aborting business details scraping.`);
+      throw new Error(`File not found: ${businessLinksFile}. Aborting.`);
     }
 
+    console.log("Reading business links...");
     const businessLinks = JSON.parse(fs.readFileSync(businessLinksFile));
     const results = [];
+
+    console.log("Launching a new browser instance for scraping business details...");
     const browser2 = await puppeteer.launch({
-      executablePath: '/snap/chromium/current/usr/lib/chromium-browser/chrome',
+      executablePath: "/snap/chromium/current/usr/lib/chromium-browser/chrome",
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-gpu',
-      ],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
     });
     const page2 = await browser2.newPage();
 
-    for (let i = 0; i < businessLinks.length; i++) {
-      const link = businessLinks[i];
-      console.log(`[INFO] Scraping business ${i + 1} of ${businessLinks.length}: ${link}`);
-
+    for (const [index, link] of businessLinks.entries()) {
+      console.log(`Scraping ${index + 1}/${businessLinks.length}: ${link}`);
       try {
-        await page2.goto(link, { waitUntil: "networkidle2", timeout: 60000 });
+        await page2.goto(link, { waitUntil: "networkidle2" });
 
         const data = await page2.evaluate(() => {
-          const extractText = (selector) => {
-            const element = document.querySelector(selector);
-            return element ? element.textContent.trim() : "N/A";
-          };
+          const extractText = (selector) => document.querySelector(selector)?.textContent.trim() || "N/A";
+          const extractAttribute = (selector, attr) => document.querySelector(selector)?.getAttribute(attr) || "N/A";
 
-          const extractAttribute = (selector, attr) => {
-            const element = document.querySelector(selector);
-            return element ? element.getAttribute(attr) : "N/A";
-          };
-
-          const name = extractText("h1.DUwDvf.lfPIob");
-          const rating = extractText(".F7nice span[aria-hidden='true']");
-          const reviews = extractText(".F7nice span[aria-label*='reviews']").replace(/[()]/g, "");
-          const businessType = extractText("button.DkEaL");
-          const address = extractText("button.CsEnBe[data-item-id='address'] .Io6YTe.fontBodyMedium");
-          const phone = extractText("button.CsEnBe[data-item-id^='phone:'] .Io6YTe.fontBodyMedium");
           let openTime = extractText("div.t39EBf.GUrTXd[aria-label]");
           openTime = openTime
             .replace(/Suggest new hours$/, "")
@@ -154,32 +103,42 @@ puppeteer.use(StealthPlugin());
             .replace(/\|\s+\|/g, "|")
             .replace(/:\s+\|/g, ":");
 
-          const website = extractAttribute("a.CsEnBe[data-item-id='authority']", "href");
-
-          return { name, rating, reviews, businessType, address, phone, openTime, website };
+          return {
+            name: extractText("h1.DUwDvf.lfPIob"),
+            rating: extractText(".F7nice span[aria-hidden='true']"),
+            reviews: extractText(".F7nice span[aria-label*='reviews']").replace(/[()]/g, ""),
+            businessType: extractText("button.DkEaL"),
+            address: extractText("button.CsEnBe[data-item-id='address'] .Io6YTe.fontBodyMedium"),
+            phone: extractText("button.CsEnBe[data-item-id^='phone:'] .Io6YTe.fontBodyMedium"),
+            openTime: openTime,
+            website: extractAttribute("a.CsEnBe[data-item-id='authority']", "href"),
+          };
         });
 
         results.push({ link, ...data });
       } catch (error) {
-        console.error(`[ERROR] Failed to scrape ${link}: ${error.message}`);
+        console.error(`Error scraping ${link}: ${error.message}`);
         results.push({ link, error: error.message });
       }
     }
 
+    console.log("Scraping completed. Saving results...");
     fs.writeFileSync(businessDetailsFile, JSON.stringify(results, null, 2));
-    console.log(`[INFO] Scraping completed. Results saved to '${businessDetailsFile}'.`);
+    console.log(`Business details saved to '${businessDetailsFile}'.`);
 
     // Convert JSON to CSV
     try {
+      console.log("Converting business details to CSV...");
       const csv = parse(results);
       fs.writeFileSync(businessDetailsCSV, csv);
-      console.log(`[INFO] CSV file created: ${businessDetailsCSV}`);
+      console.log(`CSV file created: '${businessDetailsCSV}'.`);
     } catch (error) {
-      console.error("[ERROR] Error while converting JSON to CSV:", error.message);
+      console.error("Error converting JSON to CSV:", error.message);
     }
 
     await browser2.close();
+    console.log("Script execution completed successfully.");
   } catch (error) {
-    console.error("[ERROR] Error in script execution:", error.message);
+    console.error("Error during script execution:", error.message);
   }
 })();
